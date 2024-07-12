@@ -136,7 +136,7 @@ def process_image(image_path):
 
 
 if __name__ == "__main__":
-    num_processes = 4  
+    num_processes = 7  
     with Pool(processes=num_processes) as pool:
         pool.map(process_image, acceptable_grid_paths)
         
