@@ -4,12 +4,15 @@ and write the output to a new GeoTIFF file.
 '''
 import os
 import rasterio
-from rasterio.transform import Affine
 import numpy as np
 
 def process_files(label_dir, npy_dir, output_dir):
-    # Ensure output directory exists
+    
     os.makedirs(output_dir, exist_ok=True)
+    
+    #sub dir for npy files
+    npy_output_dir = os.path.join(output_dir, 'npy_with_labels')
+    os.makedirs(npy_output_dir, exist_ok=True)
 
     # List all label files and npy files
     label_files = [f for f in os.listdir(label_dir) if f.endswith('_RAW_LABEL.tif')]
@@ -28,37 +31,37 @@ def process_files(label_dir, npy_dir, output_dir):
             npy_file_path = os.path.join(npy_dir, npy_file)
 
             # Load the npy file
-            data = np.load(npy_file_path)  # Shape: (24, 10, 1098, 1098)
+            data = np.load(npy_file_path)  # Shape: (24, 10, h, w)
 
             # Extract row and column from the npy file name
             parts = npy_file.split('_')
-            row = int(parts[2]) * 1098
-            col = int(parts[3]) * 1098
+            row = int(parts[2]) * data.shape[2]  # Height of npy data
+            col = int(parts[3]) * data.shape[3]  # Width of npy data
 
-            # Load the transformation matrix from the label file
+            # Load the transformation matrix and label data from the label file
             with rasterio.open(label_file_path) as dataset:
                 transform = dataset.transform
                 crs = dataset.crs
+                label_data = dataset.read(1)  # Read the label data
 
-            # Calculate new upper-left coordinates
-            new_upper_left_x, new_upper_left_y = transform * (col, row)
+            # Extract the corresponding label data section
+            label_data_cut = label_data[row:row+data.shape[2], col:col+data.shape[3]]
 
-            # Extract the scale and rotation components from the original transformation
-            pixel_size_x = transform.a
-            pixel_size_y = transform.e
-            rotation_x = transform.b
-            rotation_y = transform.d
+            # Expand label_data_cut to match the time steps in the npy data
+            label_data_expanded = np.repeat(label_data_cut[np.newaxis, np.newaxis, :, :], repeats=24, axis=0)  # Shape: (24, 1, h, w)
 
-            # Create a new Affine transformation matrix with the new upper-left coordinates
-            new_transform = Affine.translation(new_upper_left_x, new_upper_left_y) * Affine(
-                pixel_size_x, rotation_x, 0,
-                rotation_y, pixel_size_y, 0
-            )
+            # Combine the original npy data with the label data as the 11th band
+            combined_data = np.concatenate((data, label_data_expanded), axis=1)  # Shape: (24, 11, h, w)
 
-            # Calculate the total number of bands (timesteps * original bands)
-            total_bands = data.shape[0] * data.shape[1]  # (24 * 10)
+            # Save the new npy file
+            npy_output_file_path = os.path.join(npy_output_dir, npy_file)
+            np.save(npy_output_file_path, combined_data)
+            print(f"New npy file saved at {npy_output_file_path}")
 
-            # Define the output GeoTIFF file path, using the original npy file name for uniqueness
+            # Write the data to a GeoTIFF file as before (updated with the combined data)
+            total_bands = combined_data.shape[0] * combined_data.shape[1]  # (24 * 11)
+
+            # geotiff file name
             geotiff_file_name = f"{os.path.splitext(npy_file)[0]}.tif"
             geotiff_file_path = os.path.join(output_dir, geotiff_file_name)
 
@@ -67,27 +70,27 @@ def process_files(label_dir, npy_dir, output_dir):
                 geotiff_file_path,
                 'w',
                 driver='GTiff',
-                height=data.shape[2],  # 1098
-                width=data.shape[3],  # 1098
-                count=total_bands,  # Total number of bands (24 timesteps * 10 original bands = 240 channels)
-                dtype=data.dtype,
+                height=combined_data.shape[2],  # Height of npy data
+                width=combined_data.shape[3],  # Width of npy data
+                count=total_bands,  # Total number of bands (24 timesteps * 11 bands)
+                dtype=combined_data.dtype,
                 crs=crs,
-                transform=new_transform
+                transform=transform
             ) as dst:
                 band_index = 1
-                for timestep in range(data.shape[0]):
-                    for band in range(data.shape[1]):
-                        dst.write(data[timestep, band], band_index)
+                for timestep in range(combined_data.shape[0]):
+                    for band in range(combined_data.shape[1]):
+                        dst.write(combined_data[timestep, band], band_index)
                         band_index += 1
 
-            print(f"GeoTIFF file created at {geotiff_file_path}")           
+            print(f"GeoTIFF file created at {geotiff_file_path}")
 
 # Define the directories
-# TODO Change the directories to the correct paths
 label_dir = '/data/hpate061/CalCROP21/ACCEPTABLE_GRIDS/LABEL_MAPS'
 npy_dir = '/data/hpate061/CalCROP21/ACCEPTABLE_GRIDS/IMAGE_GRIDS'
 output_dir = '/data/hpate061/CalCROP21/ACCEPTABLE_GRIDS/GeoTIFF'
 
 # Process the files
 process_files(label_dir, npy_dir, output_dir)
+
 
