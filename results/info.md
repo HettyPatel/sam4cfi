@@ -1,1 +1,0 @@
-Just a folder to store the results created by  `grid_search.py` and other results.
